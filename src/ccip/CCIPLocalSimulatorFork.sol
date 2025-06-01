@@ -6,6 +6,7 @@ import {Register} from "./Register.sol";
 import {Internal} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Internal.sol";
 import {IERC20} from
     "@chainlink/contracts-ccip/src/v0.8/vendor/openzeppelin-solidity/v4.8.3/contracts/token/ERC20/IERC20.sol";
+import {USDCTokenPool} from "@chainlink/contracts-ccip/src/v0.8/ccip/pools/USDC/USDCTokenPool.sol";
 
 /// @title IRouterFork Interface
 interface IRouterFork {
@@ -113,6 +114,121 @@ contract CCIPLocalSimulatorFork is Test {
                 break;
             }
         }
+    }
+
+    /**
+     * @notice Similar to switchChainAndRouteMessage but allows USDC transfer
+     * @param forkId The ID of the destination network fork
+     * @param attesters The attesters to be used
+     * @param attesterPks The private keys of the attesters
+     */
+    function switchChainAndRouteMessageWithUSDC(
+        uint256 forkId,
+        address[] memory attesters,
+        uint256[] memory attesterPks
+    ) external {
+        Internal.EVM2EVMMessage memory message;
+        bytes memory cctpMessage;
+
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        uint256 length = entries.length;
+
+        for (uint256 i; i < length; ++i) {
+            if (entries[i].topics[0] == CCIPSendRequested.selector) {
+                message = abi.decode(entries[i].data, (Internal.EVM2EVMMessage));
+                if (!s_processedMessages[message.messageId]) {
+                    s_processedMessages[message.messageId] = true;
+                }
+            }
+            if (entries[i].topics[0] == keccak256("MessageSent(bytes)")) {
+                cctpMessage = abi.decode(entries[i].data, (bytes));
+            }
+        }
+
+        require(cctpMessage.length > 0, "No CCTP message found");
+        bytes[] memory offchainTokenData = _createOffchainTokenData(cctpMessage, attesters, attesterPks);
+
+        vm.selectFork(forkId);
+        assertEq(vm.activeFork(), forkId);
+
+        IRouterFork.OffRamp[] memory offRamps =
+            IRouterFork(i_register.getNetworkDetails(block.chainid).routerAddress).getOffRamps();
+        length = offRamps.length;
+
+        for (uint256 i = length; i > 0; --i) {
+            if (offRamps[i - 1].sourceChainSelector == message.sourceChainSelector) {
+                vm.startPrank(offRamps[i - 1].offRamp);
+                uint256 numberOfTokens = message.tokenAmounts.length;
+                uint32[] memory tokenGasOverrides = new uint32[](numberOfTokens);
+                for (uint256 j; j < numberOfTokens; ++j) {
+                    tokenGasOverrides[j] = uint32(message.gasLimit);
+                }
+                IEVM2EVMOffRampFork(offRamps[i - 1].offRamp).executeSingleMessage(
+                    message, offchainTokenData, tokenGasOverrides
+                );
+                vm.stopPrank();
+                break;
+            }
+        }
+    }
+
+    /// @notice Creates the offchainTokenData array with the CCTP message
+    /// @param cctpMessage The CCTP message to create the offchainTokenData from
+    /// @param attesters The attesters to be used
+    /// @param attesterPks The private keys of the attesters
+    /// @return offchainTokenData The offchainTokenData array
+    function _createOffchainTokenData(
+        bytes memory cctpMessage,
+        address[] memory attesters,
+        uint256[] memory attesterPks
+    ) internal pure returns (bytes[] memory offchainTokenData) {
+        bytes32 messageHash = keccak256(cctpMessage);
+        bytes memory attestation;
+
+        // First, sort attesters and their private keys
+        for (uint256 i = 0; i < attesters.length; i++) {
+            for (uint256 j = i + 1; j < attesters.length; j++) {
+                if (attesters[i] > attesters[j]) {
+                    // Swap addresses
+                    address tempAddr = attesters[i];
+                    attesters[i] = attesters[j];
+                    attesters[j] = tempAddr;
+                    // Swap private keys
+                    uint256 tempKey = attesterPks[i];
+                    attesterPks[i] = attesterPks[j];
+                    attesterPks[j] = tempKey;
+                }
+            }
+        }
+
+        // Create attestations from all attesters in increasing order
+        for (uint256 i = 0; i < attesters.length; i++) {
+            (uint8 v, bytes32 r, bytes32 s) = vm.sign(attesterPks[i], messageHash);
+
+            // Ensure v is exactly 27 or 28 as required by CCTP's ECDSA
+            if (v < 27) {
+                v += 27;
+            }
+
+            // Create signature in the format expected by CCTP's ECDSA
+            bytes memory signature = new bytes(65);
+            assembly {
+                mstore(add(signature, 32), r)
+                mstore(add(signature, 64), s)
+                mstore8(add(signature, 96), v)
+            }
+
+            // Append the signature to the attestation
+            attestation = bytes.concat(attestation, signature);
+        }
+
+        // Create the message and attestation struct
+        USDCTokenPool.MessageAndAttestation memory msgAndAttestation =
+            USDCTokenPool.MessageAndAttestation({message: cctpMessage, attestation: attestation});
+
+        // Create offchainTokenData array with our message and attestation
+        bytes[] memory offchainTokenData = new bytes[](1);
+        offchainTokenData[0] = abi.encode(msgAndAttestation);
     }
 
     /**
