@@ -6,7 +6,13 @@ import {Register} from "./Register.sol";
 import {Internal} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Internal.sol";
 import {IERC20} from
     "@chainlink/contracts-ccip/src/v0.8/vendor/openzeppelin-solidity/v4.8.3/contracts/token/ERC20/IERC20.sol";
-import {USDCTokenPool} from "@chainlink/contracts-ccip/src/v0.8/ccip/pools/USDC/USDCTokenPool.sol";
+
+contract USDCTokenPool {
+    struct MessageAndAttestation {
+        bytes message;
+        bytes attestation;
+    }
+}
 
 /// @title IRouterFork Interface
 interface IRouterFork {
@@ -227,7 +233,7 @@ contract CCIPLocalSimulatorFork is Test {
             USDCTokenPool.MessageAndAttestation({message: cctpMessage, attestation: attestation});
 
         // Create offchainTokenData array with our message and attestation
-        bytes[] memory offchainTokenData = new bytes[](1);
+        offchainTokenData = new bytes[](1);
         offchainTokenData[0] = abi.encode(msgAndAttestation);
     }
 
