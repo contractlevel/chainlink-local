@@ -6,6 +6,7 @@ import {Register} from "./Register.sol";
 import {Internal} from "@chainlink/contracts-ccip/contracts/libraries/Internal.sol";
 import {Client} from "@chainlink/contracts-ccip/contracts/libraries/Client.sol";
 import {IERC20} from "../vendor/openzeppelin-solidity/v4.8.3/contracts/token/ERC20/IERC20.sol";
+import {USDCTokenPool} from "@chainlink/contracts-ccip/contracts/pools/USDC/USDCTokenPool.sol";
 
 /// @title IRouterFork Interface
 interface IRouterFork {
@@ -145,6 +146,99 @@ contract CCIPLocalSimulatorFork is Test {
     }
 
     /**
+     * @notice Similar to switchChainAndRouteMessage but allows USDC transfer
+     * @param forkId The ID of the destination network fork
+     * @param attesters The attesters to be used
+     * @param attesterPks The private keys of the attesters
+     */
+    function switchChainAndRouteMessageWithUSDC(
+        uint256 forkId,
+        address[] memory attesters,
+        uint256[] memory attesterPks
+    ) external {
+        uint256 sourceForkId = vm.activeFork();
+        address sourceRouterAddress = i_register.getNetworkDetails(block.chainid).routerAddress;
+
+        uint256[] memory forkIds = new uint256[](1);
+        forkIds[0] = forkId;
+
+        bytes[] memory offchainTokenData = _createOffchainTokenData(_getCctpMessage(), attesters, attesterPks);
+        _routeCapturedMessages(forkIds, sourceForkId, sourceRouterAddress, offchainTokenData);
+    }
+
+    function _getCctpMessage() internal returns (bytes memory cctpMessage) {
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        uint256 length = entries.length;
+        bytes32 messageSentTopic = keccak256("MessageSent(bytes)");
+
+        for (uint256 i; i < length; ++i) {
+            if (entries[i].topics[0] == messageSentTopic) {
+                return abi.decode(entries[i].data, (bytes));
+            }
+        }
+
+        require(cctpMessage.length > 0, "No CCTP message found");
+    }
+
+    /// @notice Creates the offchainTokenData array with the CCTP message
+    /// @param cctpMessage The CCTP message to create the offchainTokenData from
+    /// @param attesters The attesters to be used
+    /// @param attesterPks The private keys of the attesters
+    /// @return offchainTokenData The offchainTokenData array
+    function _createOffchainTokenData(
+        bytes memory cctpMessage,
+        address[] memory attesters,
+        uint256[] memory attesterPks
+    ) internal pure returns (bytes[] memory offchainTokenData) {
+        bytes32 messageHash = keccak256(cctpMessage);
+        bytes memory attestation;
+
+        // First, sort attesters and their private keys
+        for (uint256 i = 0; i < attesters.length; i++) {
+            for (uint256 j = i + 1; j < attesters.length; j++) {
+                if (attesters[i] > attesters[j]) {
+                    // Swap addresses
+                    address tempAddr = attesters[i];
+                    attesters[i] = attesters[j];
+                    attesters[j] = tempAddr;
+                    // Swap private keys
+                    uint256 tempKey = attesterPks[i];
+                    attesterPks[i] = attesterPks[j];
+                    attesterPks[j] = tempKey;
+                }
+            }
+        }
+
+        // Create attestations from all attesters in increasing order
+        for (uint256 i = 0; i < attesters.length; i++) {
+            (uint8 v, bytes32 r, bytes32 s) = vm.sign(attesterPks[i], messageHash);
+
+            // Ensure v is exactly 27 or 28 as required by CCTP's ECDSA
+            if (v < 27) {
+                v += 27;
+            }
+
+            // Create signature in the format expected by CCTP's ECDSA
+            bytes memory signature = new bytes(65);
+            assembly {
+                mstore(add(signature, 32), r)
+                mstore(add(signature, 64), s)
+                mstore8(add(signature, 96), v)
+            }
+
+            // Append the signature to the attestation
+            attestation = bytes.concat(attestation, signature);
+        }
+
+        // Create the message and attestation struct
+        USDCTokenPool.MessageAndAttestation memory msgAndAttestation =
+            USDCTokenPool.MessageAndAttestation({message: cctpMessage, attestation: attestation});
+
+        offchainTokenData = new bytes[](1);
+        offchainTokenData[0] = abi.encode(msgAndAttestation);
+    }
+
+    /**
      * @notice Returns the default values for currently CCIP supported networks. If network is not present or some of the values are changed, user can manually add new network details using the `setNetworkDetails` function.
      *
      * @param chainId - The blockchain network chain ID. For example 11155111 for Ethereum Sepolia. Not CCIP chain selector.
@@ -203,6 +297,16 @@ contract CCIPLocalSimulatorFork is Test {
     function _routeCapturedMessages(uint256[] memory forkIds, uint256 sourceForkId, address sourceRouterAddress)
         internal
     {
+        bytes[] memory offchainTokenData = new bytes[](0);
+        _routeCapturedMessages(forkIds, sourceForkId, sourceRouterAddress, offchainTokenData);
+    }
+
+    function _routeCapturedMessages(
+        uint256[] memory forkIds,
+        uint256 sourceForkId,
+        address sourceRouterAddress,
+        bytes[] memory cctpOffchainTokenData
+    ) internal {
         Vm.Log[] memory entries = vm.getRecordedLogs();
         uint256 logsLength = entries.length;
 
@@ -232,7 +336,8 @@ contract CCIPLocalSimulatorFork is Test {
                                 if (offRamps[k - 1].sourceChainSelector == message.sourceChainSelector) {
                                     vm.startPrank(offRamps[k - 1].offRamp);
                                     uint256 numberOfTokens = message.tokenAmounts.length;
-                                    bytes[] memory offchainTokenData = new bytes[](numberOfTokens);
+                                    bytes[] memory offchainTokenData =
+                                        _offchainTokenData(numberOfTokens, cctpOffchainTokenData);
                                     uint32[] memory tokenGasOverrides = new uint32[](numberOfTokens);
                                     for (uint256 l; l < numberOfTokens; ++l) {
                                         tokenGasOverrides[l] = uint32(message.gasLimit);
@@ -303,7 +408,8 @@ contract CCIPLocalSimulatorFork is Test {
                                         gasLimit: gasLimit,
                                         tokenAmounts: tokenAmounts
                                     });
-                                    bytes[] memory offchainTokenData = new bytes[](numberOfTokens);
+                                    bytes[] memory offchainTokenData =
+                                        _offchainTokenData(numberOfTokens, cctpOffchainTokenData);
                                     uint32[] memory tokenGasOverrides = new uint32[](numberOfTokens);
                                     for (uint256 l; l < numberOfTokens; ++l) {
                                         tokenGasOverrides[l] = uint32(gasLimit);
@@ -325,6 +431,18 @@ contract CCIPLocalSimulatorFork is Test {
                 }
             }
         }
+    }
+
+    function _offchainTokenData(uint256 numberOfTokens, bytes[] memory cctpOffchainTokenData)
+        internal
+        pure
+        returns (bytes[] memory)
+    {
+        if (cctpOffchainTokenData.length > 0) {
+            return cctpOffchainTokenData;
+        }
+
+        return new bytes[](numberOfTokens);
     }
 
     /**
