@@ -1,3 +1,11 @@
+## Contract Level Fork
+
+This fork of the [original chainlink-local](https://github.com/smartcontractkit/chainlink-local) features the following changes:
+
+- `CCIPLocalSimulatorFork` now supports USDC/CCTP transfers. Attesters and their private keys must be passed to `switchChainAndRouteMessageWithUSDC()`
+- `CCIPLocalSimulator` now supports dynamic source chain selectors. Set them with `MockRouter.setPeerToChainSelector()`
+- The forked `MockRouter` in tests/mocks/ bypasses gasLimit checks because no matter what value was used, it reverted with `Not enough gas` or `Out of gas`. Since we are using it for fuzzed invariant testing, the gas checks weren't an integral part of the test suite.
+
 ## Chainlink Local
 
 Chainlink Local is an installable dependency. It provides a tool (the Chainlink Local Simulator) that developers import into their Foundry or Hardhat or Remix projects. This tool runs [Chainlink CCIP](https://docs.chain.link/ccip) locally which means developers can rapidly explore, prototype and iterate CCIP dApps off-chain in a local environment, and move to testnet only when they're ready to test in a live environment.

@@ -24,6 +24,14 @@ contract MockCCIPRouter is IRouter, IRouterClient {
     error InvalidExtraArgsTag();
     error ReceiverError(bytes err);
 
+    error NoContract();
+    error NoGasForCallExactCheck();
+    error NotEnoughGasForCall();
+
+    bytes4 internal constant NO_CONTRACT_SIG = 0x0c3b563c;
+    bytes4 internal constant NO_GAS_FOR_CALL_EXACT_CHECK_SIG = 0xafa32a2c;
+    bytes4 internal constant NOT_ENOUGH_GAS_FOR_CALL_SIG = 0x37c3be29;
+
     event MessageExecuted(bytes32 messageId, uint64 sourceChainSelector, address offRamp, bytes32 calldataHash);
     event MsgExecuted(bool success, bytes retData, uint256 gasUsed);
 
