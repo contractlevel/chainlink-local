@@ -4,7 +4,7 @@ pragma solidity ^0.8.19;
 import {WETH9} from "../shared/WETH9.sol";
 import {LinkToken} from "../shared/LinkToken.sol";
 import {BurnMintERC677Helper} from "./BurnMintERC677Helper.sol";
-import {MockCCIPRouter} from "@chainlink/contracts-ccip/src/v0.8/ccip/test/mocks/MockRouter.sol";
+import {MockCCIPRouter} from "../../test/mocks/MockRouter.sol";
 import {IRouterClient} from "@chainlink/contracts-ccip/src/v0.8/ccip/interfaces/IRouterClient.sol";
 import {IERC20} from
     "@chainlink/contracts-ccip/src/v0.8/vendor/openzeppelin-solidity/v4.8.3/contracts/token/ERC20/IERC20.sol";
