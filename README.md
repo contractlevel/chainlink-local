@@ -6,6 +6,28 @@ This fork of the [original chainlink-local](https://github.com/smartcontractkit/
 - `CCIPLocalSimulator` now supports dynamic source chain selectors. Set them with `MockRouter.setPeerToChainSelector()`
 - The forked `MockRouter` in tests/mocks/ bypasses gasLimit checks because no matter what value was used, it reverted with `Not enough gas` or `Out of gas`. Since we are using it for fuzzed invariant testing, the gas checks weren't an integral part of the test suite.
 
+## CCTP Attesters
+
+CCTP Attesters and their private keys can be created with Foundry's `makeAddrAndKey`.
+
+Create attesters:
+```
+for (uint256 i = 0; i < attesters.length; i++) {
+            (attesters[i], attesterPks[i]) = makeAddrAndKey(string.concat("attester", vm.toString(i)));
+        }
+```
+
+The `CCTPMessageTransmitter` on each chain will need to update the "attester manager" via the `owner`. The `attesterManager` should then pass each attester to `enableAttester` and set the signature threshold to the number of attesters.
+```
+        _changePrank(cctpMessageTransmitter.owner());
+        cctpMessageTransmitter.updateAttesterManager(attesters[0]);
+        _changePrank(attesters[0]);
+        for (uint256 i = 0; i < attesters.length; i++) {
+            cctpMessageTransmitter.enableAttester(attesters[i]);
+        }
+        cctpMessageTransmitter.setSignatureThreshold(attesters.length);
+```
+
 ## Chainlink Local
 
 Chainlink Local is an installable dependency. It provides a tool (the Chainlink Local Simulator) that developers import into their Foundry or Hardhat or Remix projects. This tool runs [Chainlink CCIP](https://docs.chain.link/ccip) locally which means developers can rapidly explore, prototype and iterate CCIP dApps off-chain in a local environment, and move to testnet only when they're ready to test in a live environment.
