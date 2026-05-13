@@ -101,6 +101,8 @@ contract CCIPLocalSimulatorFork is Test {
     /// @notice Mapping to track processed messages
     mapping(bytes32 messageId => bool isProcessed) internal s_processedMessages;
 
+    bytes[] internal s_cctpOffchainTokenData;
+
     /**
      * @notice Constructor to initialize the contract
      */
@@ -162,8 +164,9 @@ contract CCIPLocalSimulatorFork is Test {
         uint256[] memory forkIds = new uint256[](1);
         forkIds[0] = forkId;
 
-        bytes[] memory offchainTokenData = _createOffchainTokenData(_getCctpMessage(), attesters, attesterPks);
-        _routeCapturedMessages(forkIds, sourceForkId, sourceRouterAddress, offchainTokenData);
+        s_cctpOffchainTokenData = _createOffchainTokenData(_getCctpMessage(), attesters, attesterPks);
+        _routeCapturedMessages(forkIds, sourceForkId, sourceRouterAddress);
+        delete s_cctpOffchainTokenData;
     }
 
     function _getCctpMessage() internal returns (bytes memory cctpMessage) {
@@ -297,16 +300,6 @@ contract CCIPLocalSimulatorFork is Test {
     function _routeCapturedMessages(uint256[] memory forkIds, uint256 sourceForkId, address sourceRouterAddress)
         internal
     {
-        bytes[] memory offchainTokenData = new bytes[](0);
-        _routeCapturedMessages(forkIds, sourceForkId, sourceRouterAddress, offchainTokenData);
-    }
-
-    function _routeCapturedMessages(
-        uint256[] memory forkIds,
-        uint256 sourceForkId,
-        address sourceRouterAddress,
-        bytes[] memory cctpOffchainTokenData
-    ) internal {
         Vm.Log[] memory entries = vm.getRecordedLogs();
         uint256 logsLength = entries.length;
 
@@ -336,8 +329,7 @@ contract CCIPLocalSimulatorFork is Test {
                                 if (offRamps[k - 1].sourceChainSelector == message.sourceChainSelector) {
                                     vm.startPrank(offRamps[k - 1].offRamp);
                                     uint256 numberOfTokens = message.tokenAmounts.length;
-                                    bytes[] memory offchainTokenData =
-                                        _offchainTokenData(numberOfTokens, cctpOffchainTokenData);
+                                    bytes[] memory offchainTokenData = _offchainTokenData(numberOfTokens);
                                     uint32[] memory tokenGasOverrides = new uint32[](numberOfTokens);
                                     for (uint256 l; l < numberOfTokens; ++l) {
                                         tokenGasOverrides[l] = uint32(message.gasLimit);
@@ -408,8 +400,7 @@ contract CCIPLocalSimulatorFork is Test {
                                         gasLimit: gasLimit,
                                         tokenAmounts: tokenAmounts
                                     });
-                                    bytes[] memory offchainTokenData =
-                                        _offchainTokenData(numberOfTokens, cctpOffchainTokenData);
+                                    bytes[] memory offchainTokenData = _offchainTokenData(numberOfTokens);
                                     uint32[] memory tokenGasOverrides = new uint32[](numberOfTokens);
                                     for (uint256 l; l < numberOfTokens; ++l) {
                                         tokenGasOverrides[l] = uint32(gasLimit);
@@ -433,13 +424,13 @@ contract CCIPLocalSimulatorFork is Test {
         }
     }
 
-    function _offchainTokenData(uint256 numberOfTokens, bytes[] memory cctpOffchainTokenData)
-        internal
-        pure
-        returns (bytes[] memory)
-    {
-        if (cctpOffchainTokenData.length > 0) {
-            return cctpOffchainTokenData;
+    function _offchainTokenData(uint256 numberOfTokens) internal view returns (bytes[] memory offchainTokenData) {
+        if (s_cctpOffchainTokenData.length > 0) {
+            offchainTokenData = new bytes[](s_cctpOffchainTokenData.length);
+            for (uint256 i; i < s_cctpOffchainTokenData.length; ++i) {
+                offchainTokenData[i] = s_cctpOffchainTokenData[i];
+            }
+            return offchainTokenData;
         }
 
         return new bytes[](numberOfTokens);
