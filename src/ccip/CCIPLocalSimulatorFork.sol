@@ -171,7 +171,12 @@ contract CCIPLocalSimulatorFork is Test {
     /// @notice Mapping to track processed messages
     mapping(bytes32 messageId => bool isProcessed) internal s_processedMessages;
 
-    bytes[] internal s_cctpOffchainTokenData;
+    bool internal s_routeWithUSDC;
+    address[] internal s_cctpAttesters;
+    uint256[] internal s_cctpAttesterPks;
+
+    uint256 internal constant LEGACY_CCTP_MESSAGE_SIZE = 248;
+    uint256 internal constant CCV_CCTP_MESSAGE_SIZE = 412;
 
     /**
      * @notice Constructor to initialize the contract
@@ -234,37 +239,111 @@ contract CCIPLocalSimulatorFork is Test {
         uint256[] memory forkIds = new uint256[](1);
         forkIds[0] = forkId;
 
-        s_cctpOffchainTokenData = _createOffchainTokenData(_getCctpMessage(), attesters, attesterPks);
+        s_routeWithUSDC = true;
+        s_cctpAttesters = attesters;
+        s_cctpAttesterPks = attesterPks;
         _routeCapturedMessages(forkIds, sourceForkId, sourceRouterAddress);
-        delete s_cctpOffchainTokenData;
+        delete s_routeWithUSDC;
+        delete s_cctpAttesters;
+        delete s_cctpAttesterPks;
     }
 
-    function _getCctpMessage() internal returns (bytes memory cctpMessage) {
-        Vm.Log[] memory entries = vm.getRecordedLogs();
+    function _getCctpMessage(Vm.Log[] memory entries, bytes32 messageId)
+        internal
+        pure
+        returns (bytes memory cctpMessage)
+    {
         uint256 length = entries.length;
         bytes32 messageSentTopic = keccak256("MessageSent(bytes)");
 
         for (uint256 i; i < length; ++i) {
             if (entries[i].topics[0] == messageSentTopic) {
-                return abi.decode(entries[i].data, (bytes));
+                cctpMessage = abi.decode(entries[i].data, (bytes));
+                console2.log("CCV CCTP candidate length", cctpMessage.length);
+                if (cctpMessage.length < CCV_CCTP_MESSAGE_SIZE) {
+                    continue;
+                }
+                if (_cctpMessageId(cctpMessage) == messageId) {
+                    return cctpMessage;
+                }
             }
         }
 
-        require(cctpMessage.length > 0, "No CCTP message found");
+        revert("No CCTP message found");
     }
 
-    /// @notice Creates the offchainTokenData array with the CCTP message
-    /// @param cctpMessage The CCTP message to create the offchainTokenData from
-    /// @param attesters The attesters to be used
-    /// @param attesterPks The private keys of the attesters
+    function _getLegacyCctpMessage(Vm.Log[] memory entries, bytes memory sourceTokenData)
+        internal
+        pure
+        returns (bytes memory cctpMessage)
+    {
+        uint64 expectedNonce = _legacySourceTokenDataNonce(sourceTokenData);
+        uint32 expectedSourceDomain = _legacySourceTokenDataDomain(sourceTokenData);
+        console2.log("legacy CCTP expected nonce", expectedNonce);
+        console2.log("legacy CCTP expected source domain", expectedSourceDomain);
+        uint256 length = entries.length;
+        bytes32 messageSentTopic = keccak256("MessageSent(bytes)");
+
+        for (uint256 i; i < length; ++i) {
+            if (entries[i].topics[0] == messageSentTopic) {
+                cctpMessage = abi.decode(entries[i].data, (bytes));
+                console2.log("legacy CCTP candidate emitter", entries[i].emitter);
+                console2.log("legacy CCTP candidate length", cctpMessage.length);
+                if (cctpMessage.length != LEGACY_CCTP_MESSAGE_SIZE) {
+                    continue;
+                }
+                console2.log("legacy CCTP candidate nonce", _legacyCctpMessageNonce(cctpMessage));
+                console2.log("legacy CCTP candidate source domain", _legacyCctpMessageSourceDomain(cctpMessage));
+                if (
+                    _legacyCctpMessageNonce(cctpMessage) == expectedNonce
+                        && _legacyCctpMessageSourceDomain(cctpMessage) == expectedSourceDomain
+                ) {
+                    return cctpMessage;
+                }
+            }
+        }
+
+        revert("No CCTP message found");
+    }
+
+    /// @notice Creates the offchainTokenData array with a CCV CCTP v2 verifier result
+    /// @param entries The recorded logs to scan for the CCTP message
+    /// @param messageId The CCIP message ID embedded in the CCTP hook data
     /// @return offchainTokenData The offchainTokenData array
-    function _createOffchainTokenData(
-        bytes memory cctpMessage,
-        address[] memory attesters,
-        uint256[] memory attesterPks
-    ) internal pure returns (bytes[] memory offchainTokenData) {
+    function _createOffchainTokenData(Vm.Log[] memory entries, bytes32 messageId)
+        internal
+        returns (bytes[] memory offchainTokenData)
+    {
+        bytes memory cctpMessage = _getCctpMessage(entries, messageId);
+        bytes4 versionTag = _cctpVerifierVersion(cctpMessage);
+        bytes memory attestation = _createAttestation(cctpMessage);
+
+        offchainTokenData = new bytes[](1);
+        offchainTokenData[0] = bytes.concat(versionTag, cctpMessage, attestation);
+    }
+
+    function _createLegacyOffchainTokenData(
+        uint256 numberOfTokens,
+        bytes[] memory sourceTokenData,
+        Vm.Log[] memory entries
+    ) internal returns (bytes[] memory offchainTokenData) {
+        offchainTokenData = new bytes[](numberOfTokens);
+        for (uint256 i; i < numberOfTokens; ++i) {
+            if (i >= sourceTokenData.length || sourceTokenData[i].length < 64) {
+                continue;
+            }
+
+            bytes memory cctpMessage = _getLegacyCctpMessage(entries, sourceTokenData[i]);
+            MessageAndAttestation memory msgAndAttestation =
+                MessageAndAttestation({message: cctpMessage, attestation: _createAttestation(cctpMessage)});
+            offchainTokenData[i] = abi.encode(msgAndAttestation);
+        }
+    }
+
+    function _createAttestation(bytes memory cctpMessage) internal returns (bytes memory attestation) {
         bytes32 messageHash = keccak256(cctpMessage);
-        bytes memory attestation;
+        address[] memory attesters = s_cctpAttesters;
+        uint256[] memory attesterPks = s_cctpAttesterPks;
 
         // First, sort attesters and their private keys
         for (uint256 i = 0; i < attesters.length; i++) {
@@ -302,20 +381,53 @@ contract CCIPLocalSimulatorFork is Test {
             // Append the signature to the attestation
             attestation = bytes.concat(attestation, signature);
         }
-
-        // Create the message and attestation struct
-        MessageAndAttestation memory msgAndAttestation =
-            MessageAndAttestation({message: cctpMessage, attestation: attestation});
-        // USDCTokenPool.MessageAndAttestation memory msgAndAttestation =
-        //     USDCTokenPool.MessageAndAttestation({message: cctpMessage, attestation: attestation});
-
-        offchainTokenData = new bytes[](1);
-        offchainTokenData[0] = abi.encode(msgAndAttestation);
     }
 
     struct MessageAndAttestation {
         bytes message;
         bytes attestation;
+    }
+
+    function _cctpVerifierVersion(bytes memory cctpMessage) internal pure returns (bytes4 versionTag) {
+        require(cctpMessage.length >= 380, "Invalid CCTP message");
+        assembly {
+            versionTag := mload(add(add(cctpMessage, 32), 376))
+        }
+    }
+
+    function _cctpMessageId(bytes memory cctpMessage) internal pure returns (bytes32 messageId) {
+        require(cctpMessage.length >= 412, "Invalid CCTP message");
+        assembly {
+            messageId := mload(add(add(cctpMessage, 32), 380))
+        }
+    }
+
+    function _legacySourceTokenDataNonce(bytes memory sourceTokenData) internal pure returns (uint64 nonce) {
+        require(sourceTokenData.length >= 64, "Invalid CCTP source token data");
+        assembly {
+            nonce := mload(add(add(sourceTokenData, 32), sub(mload(sourceTokenData), 64)))
+        }
+    }
+
+    function _legacySourceTokenDataDomain(bytes memory sourceTokenData) internal pure returns (uint32 domain) {
+        require(sourceTokenData.length >= 32, "Invalid CCTP source token data");
+        assembly {
+            domain := mload(add(add(sourceTokenData, 32), sub(mload(sourceTokenData), 32)))
+        }
+    }
+
+    function _legacyCctpMessageSourceDomain(bytes memory cctpMessage) internal pure returns (uint32 domain) {
+        require(cctpMessage.length >= 8, "Invalid CCTP message");
+        assembly {
+            domain := shr(224, mload(add(add(cctpMessage, 32), 4)))
+        }
+    }
+
+    function _legacyCctpMessageNonce(bytes memory cctpMessage) internal pure returns (uint64 nonce) {
+        require(cctpMessage.length >= 20, "Invalid CCTP message");
+        assembly {
+            nonce := shr(192, mload(add(add(cctpMessage, 32), 12)))
+        }
     }
 
     /**
@@ -406,7 +518,8 @@ contract CCIPLocalSimulatorFork is Test {
                                 if (offRamps[k - 1].sourceChainSelector == message.sourceChainSelector) {
                                     vm.startPrank(offRamps[k - 1].offRamp);
                                     uint256 numberOfTokens = message.tokenAmounts.length;
-                                    bytes[] memory offchainTokenData = _offchainTokenData(numberOfTokens);
+                                    bytes[] memory offchainTokenData =
+                                        _offchainTokenDataPreV1dot6(numberOfTokens, message.sourceTokenData, entries);
                                     uint32[] memory tokenGasOverrides = new uint32[](numberOfTokens);
                                     for (uint256 l; l < numberOfTokens; ++l) {
                                         tokenGasOverrides[l] = uint32(message.gasLimit);
@@ -457,14 +570,13 @@ contract CCIPLocalSimulatorFork is Test {
                                     uint256 numberOfTokens = message.tokenAmounts.length;
                                     Internal.Any2EVMTokenTransfer[] memory tokenAmounts =
                                         new Internal.Any2EVMTokenTransfer[](numberOfTokens);
+                                    address decodedReceiver = _decodeEvmAddress(message.receiver);
                                     for (uint256 l; l < numberOfTokens; ++l) {
+                                        address decodedDestToken =
+                                            _decodeEvmAddress(message.tokenAmounts[l].destTokenAddress);
                                         tokenAmounts[l] = Internal.Any2EVMTokenTransfer({
-                                            sourcePoolAddress: abi.encodePacked(
-                                                message.tokenAmounts[l].sourcePoolAddress
-                                            ),
-                                            destTokenAddress: address(
-                                                uint160(bytes20(message.tokenAmounts[l].destTokenAddress))
-                                            ),
+                                            sourcePoolAddress: abi.encode(message.tokenAmounts[l].sourcePoolAddress),
+                                            destTokenAddress: decodedDestToken,
                                             destGasAmount: abi.decode(message.tokenAmounts[l].destExecData, (uint32)),
                                             extraData: message.tokenAmounts[l].extraData,
                                             amount: message.tokenAmounts[l].amount
@@ -472,13 +584,19 @@ contract CCIPLocalSimulatorFork is Test {
                                     }
                                     Internal.Any2EVMRampMessage memory any2EVMRampMessage = Internal.Any2EVMRampMessage({
                                         header: message.header,
-                                        sender: abi.encodePacked(message.sender),
+                                        sender: abi.encode(message.sender),
                                         data: message.data,
-                                        receiver: address(uint160(bytes20(message.receiver))),
+                                        receiver: decodedReceiver,
                                         gasLimit: gasLimit,
                                         tokenAmounts: tokenAmounts
                                     });
-                                    bytes[] memory offchainTokenData = _offchainTokenData(numberOfTokens);
+                                    bytes[] memory sourceTokenData = new bytes[](numberOfTokens);
+                                    for (uint256 l; l < numberOfTokens; ++l) {
+                                        sourceTokenData[l] = message.tokenAmounts[l].extraData;
+                                    }
+                                    bytes[] memory offchainTokenData = _offchainTokenData(
+                                        numberOfTokens, message.header.messageId, sourceTokenData, entries
+                                    );
                                     uint32[] memory tokenGasOverrides = new uint32[](numberOfTokens);
                                     for (uint256 l; l < numberOfTokens; ++l) {
                                         tokenGasOverrides[l] = uint32(gasLimit);
@@ -503,13 +621,29 @@ contract CCIPLocalSimulatorFork is Test {
         }
     }
 
-    function _offchainTokenData(uint256 numberOfTokens) internal view returns (bytes[] memory offchainTokenData) {
-        if (s_cctpOffchainTokenData.length > 0) {
-            offchainTokenData = new bytes[](s_cctpOffchainTokenData.length);
-            for (uint256 i; i < s_cctpOffchainTokenData.length; ++i) {
-                offchainTokenData[i] = s_cctpOffchainTokenData[i];
+    function _offchainTokenData(
+        uint256 numberOfTokens,
+        bytes32 messageId,
+        bytes[] memory sourceTokenData,
+        Vm.Log[] memory entries
+    ) internal returns (bytes[] memory offchainTokenData) {
+        if (s_routeWithUSDC && numberOfTokens > 0) {
+            if (sourceTokenData.length > 0 && sourceTokenData[0].length == 64) {
+                return _createLegacyOffchainTokenData(numberOfTokens, sourceTokenData, entries);
             }
-            return offchainTokenData;
+            return _createOffchainTokenData(entries, messageId);
+        }
+
+        return new bytes[](numberOfTokens);
+    }
+
+    function _offchainTokenDataPreV1dot6(
+        uint256 numberOfTokens,
+        bytes[] memory sourceTokenData,
+        Vm.Log[] memory entries
+    ) internal returns (bytes[] memory offchainTokenData) {
+        if (s_routeWithUSDC && numberOfTokens > 0) {
+            return _createLegacyOffchainTokenData(numberOfTokens, sourceTokenData, entries);
         }
 
         return new bytes[](numberOfTokens);
@@ -542,5 +676,16 @@ contract CCIPLocalSimulatorFork is Test {
         }
 
         revert InvalidExtraArgsTag();
+    }
+
+    function _decodeEvmAddress(bytes memory encodedAddress) internal pure returns (address decodedAddress) {
+        if (encodedAddress.length == 20) {
+            return address(uint160(bytes20(encodedAddress)));
+        }
+        if (encodedAddress.length == 32) {
+            return abi.decode(encodedAddress, (address));
+        }
+
+        revert("Invalid EVM address bytes");
     }
 }
