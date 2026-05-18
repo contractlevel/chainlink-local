@@ -6,7 +6,6 @@ import {Register} from "./Register.sol";
 // import {Internal} from "@chainlink/contracts-ccip/contracts/libraries/Internal.sol";
 import {Client} from "@chainlink/contracts-ccip/contracts/libraries/Client.sol";
 import {IERC20} from "../vendor/openzeppelin-solidity/v4.8.3/contracts/token/ERC20/IERC20.sol";
-
 // import {USDCTokenPool} from "@chainlink/contracts-ccip/contracts/pools/USDC/USDCTokenPool.sol";
 
 /// @title IRouterFork Interface
@@ -39,71 +38,72 @@ interface IRouterFork {
 
 library Internal {
     /// @notice Family-agnostic header for OnRamp & OffRamp messages.
-    /// The messageId is not expected to match hash(message), since it may originate from another ramp family.
-    struct RampMessageHeader {
-        bytes32 messageId; // Unique identifier for the message, generated with the source chain's encoding scheme (i.e. not necessarily abi.encoded).
-        uint64 sourceChainSelector; // ─╮ the chain selector of the source chain, note: not chainId.
-        uint64 destChainSelector; //    │ the chain selector of the destination chain, note: not chainId.
-        uint64 sequenceNumber; //       │ sequence number, not unique across lanes.
-        uint64 nonce; // ───────────────╯ nonce for this lane for this sender, not unique across senders/lanes.
-    }
+  /// The messageId is not expected to match hash(message), since it may originate from another ramp family.
+  struct RampMessageHeader {
+    bytes32 messageId; // Unique identifier for the message, generated with the source chain's encoding scheme (i.e. not necessarily abi.encoded).
+    uint64 sourceChainSelector; // ─╮ the chain selector of the source chain, note: not chainId.
+    uint64 destChainSelector; //    │ the chain selector of the destination chain, note: not chainId.
+    uint64 sequenceNumber; //       │ sequence number, not unique across lanes.
+    uint64 nonce; // ───────────────╯ nonce for this lane for this sender, not unique across senders/lanes.
+  }
 
-    /// @notice Family-agnostic message routed to an OffRamp.
-    /// Note: hash(Any2EVMRampMessage) != hash(EVM2AnyRampMessage), hash(Any2EVMRampMessage) != messageId due to encoding
-    /// and parameter differences.
-    struct Any2EVMRampMessage {
-        RampMessageHeader header; // Message header.
-        bytes sender; // sender address on the source chain.
-        bytes data; // arbitrary data payload supplied by the message sender.
-        address receiver; // receiver address on the destination chain.
-        uint256 gasLimit; // user supplied maximum gas amount available for dest chain execution.
-        Any2EVMTokenTransfer[] tokenAmounts; // array of tokens and amounts to transfer.
-    }
+  /// @notice Family-agnostic message routed to an OffRamp.
+  /// Note: hash(Any2EVMRampMessage) != hash(EVM2AnyRampMessage), hash(Any2EVMRampMessage) != messageId due to encoding
+  /// and parameter differences.
+  struct Any2EVMRampMessage {
+    RampMessageHeader header; // Message header.
+    bytes sender; // sender address on the source chain.
+    bytes data; // arbitrary data payload supplied by the message sender.
+    address receiver; // receiver address on the destination chain.
+    uint256 gasLimit; // user supplied maximum gas amount available for dest chain execution.
+    Any2EVMTokenTransfer[] tokenAmounts; // array of tokens and amounts to transfer.
+  }
 
-    struct Any2EVMTokenTransfer {
-        // The source pool EVM address encoded to bytes. This value is trusted as it is obtained through the onRamp. It can
-        // be relied upon by the destination pool to validate the source pool.
-        bytes sourcePoolAddress;
-        address destTokenAddress; // ─╮ Address of destination token
-        uint32 destGasAmount; // ─────╯ The amount of gas available for the releaseOrMint and transfer calls on the offRamp.
-        // Optional pool data to be transferred to the destination chain. Be default this is capped at
-        // CCIP_LOCK_OR_BURN_V1_RET_BYTES bytes. If more data is required, the TokenTransferFeeConfig.destBytesOverhead
-        // has to be set for the specific token.
-        bytes extraData;
-        uint256 amount; // Amount of tokens.
-    }
+  struct Any2EVMTokenTransfer {
+    // The source pool EVM address encoded to bytes. This value is trusted as it is obtained through the onRamp. It can
+    // be relied upon by the destination pool to validate the source pool.
+    bytes sourcePoolAddress;
+    address destTokenAddress; // ─╮ Address of destination token
+    uint32 destGasAmount; // ─────╯ The amount of gas available for the releaseOrMint and transfer calls on the offRamp.
+    // Optional pool data to be transferred to the destination chain. Be default this is capped at
+    // CCIP_LOCK_OR_BURN_V1_RET_BYTES bytes. If more data is required, the TokenTransferFeeConfig.destBytesOverhead
+    // has to be set for the specific token.
+    bytes extraData;
+    uint256 amount; // Amount of tokens.
+  }
 
-    /// @notice Family-agnostic message emitted from the OnRamp.
-    /// Note: hash(Any2EVMRampMessage) != hash(EVM2AnyRampMessage) due to encoding & parameter differences.
-    /// messageId = hash(EVM2AnyRampMessage) using the source EVM chain's encoding format.
-    struct EVM2AnyRampMessage {
-        RampMessageHeader header; // Message header.
-        address sender; // sender address on the source chain.
-        bytes data; // arbitrary data payload supplied by the message sender.
-        bytes receiver; // receiver address on the destination chain.
-        bytes extraArgs; // destination-chain specific extra args, such as the gasLimit for EVM chains.
-        address feeToken; // fee token.
-        uint256 feeTokenAmount; // fee token amount.
-        uint256 feeValueJuels; // fee amount in Juels.
-        EVM2AnyTokenTransfer[] tokenAmounts; // array of tokens and amounts to transfer.
-    }
+  /// @notice Family-agnostic message emitted from the OnRamp.
+  /// Note: hash(Any2EVMRampMessage) != hash(EVM2AnyRampMessage) due to encoding & parameter differences.
+  /// messageId = hash(EVM2AnyRampMessage) using the source EVM chain's encoding format.
+  struct EVM2AnyRampMessage {
+    RampMessageHeader header; // Message header.
+    address sender; // sender address on the source chain.
+    bytes data; // arbitrary data payload supplied by the message sender.
+    bytes receiver; // receiver address on the destination chain.
+    bytes extraArgs; // destination-chain specific extra args, such as the gasLimit for EVM chains.
+    address feeToken; // fee token.
+    uint256 feeTokenAmount; // fee token amount.
+    uint256 feeValueJuels; // fee amount in Juels.
+    EVM2AnyTokenTransfer[] tokenAmounts; // array of tokens and amounts to transfer.
+  }
 
-    struct EVM2AnyTokenTransfer {
-        // The source pool EVM address. This value is trusted as it was obtained through the onRamp. It can be relied
-        // upon by the destination pool to validate the source pool.
-        address sourcePoolAddress;
-        // The EVM address of the destination token.
-        // This value is UNTRUSTED as any pool owner can return whatever value they want.
-        bytes destTokenAddress;
-        // Optional pool data to be transferred to the destination chain. Be default this is capped at
-        // CCIP_LOCK_OR_BURN_V1_RET_BYTES bytes. If more data is required, the TokenTransferFeeConfig.destBytesOverhead
-        // has to be set for the specific token.
-        bytes extraData;
-        uint256 amount; // Amount of tokens.
-        // Destination chain data used to execute the token transfer on the destination chain. For an EVM destination, it
-        // consists of the amount of gas available for the releaseOrMint and transfer calls made by the offRamp.
-        bytes destExecData;
-    }
+  struct EVM2AnyTokenTransfer {
+    // The source pool EVM address. This value is trusted as it was obtained through the onRamp. It can be relied
+    // upon by the destination pool to validate the source pool.
+    address sourcePoolAddress;
+    // The EVM address of the destination token.
+    // This value is UNTRUSTED as any pool owner can return whatever value they want.
+    bytes destTokenAddress;
+    // Optional pool data to be transferred to the destination chain. Be default this is capped at
+    // CCIP_LOCK_OR_BURN_V1_RET_BYTES bytes. If more data is required, the TokenTransferFeeConfig.destBytesOverhead
+    // has to be set for the specific token.
+    bytes extraData;
+    uint256 amount; // Amount of tokens.
+    // Destination chain data used to execute the token transfer on the destination chain. For an EVM destination, it
+    // consists of the amount of gas available for the releaseOrMint and transfer calls made by the offRamp.
+    bytes destExecData;
+  }
+
 }
 
 /// @title IEVM2EVMOffRampFork Interface
@@ -245,21 +245,16 @@ contract CCIPLocalSimulatorFork is Test {
         _routeCapturedMessages(forkIds, sourceForkId, sourceRouterAddress);
         delete s_routeWithUSDC;
         delete s_cctpAttesters;
-        delete s_cctpAttesterPks;
+        delete s_cctpAttesterPk
     }
 
-    function _getCctpMessage(Vm.Log[] memory entries, bytes32 messageId)
-        internal
-        pure
-        returns (bytes memory cctpMessage)
-    {
+    function _getCctpMessage(Vm.Log[] memory entries, bytes32 messageId) internal pure returns (bytes memory cctpMessage) {
         uint256 length = entries.length;
         bytes32 messageSentTopic = keccak256("MessageSent(bytes)");
 
         for (uint256 i; i < length; ++i) {
             if (entries[i].topics[0] == messageSentTopic) {
                 cctpMessage = abi.decode(entries[i].data, (bytes));
-                console2.log("CCV CCTP candidate length", cctpMessage.length);
                 if (cctpMessage.length < CCV_CCTP_MESSAGE_SIZE) {
                     continue;
                 }
@@ -272,28 +267,21 @@ contract CCIPLocalSimulatorFork is Test {
         revert("No CCTP message found");
     }
 
-    function _getLegacyCctpMessage(Vm.Log[] memory entries, bytes memory sourceTokenData)
-        internal
-        pure
-        returns (bytes memory cctpMessage)
-    {
+    function _getLegacyCctpMessage(
+        Vm.Log[] memory entries,
+        bytes memory sourceTokenData
+    ) internal pure returns (bytes memory cctpMessage) {
         uint64 expectedNonce = _legacySourceTokenDataNonce(sourceTokenData);
         uint32 expectedSourceDomain = _legacySourceTokenDataDomain(sourceTokenData);
-        console2.log("legacy CCTP expected nonce", expectedNonce);
-        console2.log("legacy CCTP expected source domain", expectedSourceDomain);
         uint256 length = entries.length;
         bytes32 messageSentTopic = keccak256("MessageSent(bytes)");
 
         for (uint256 i; i < length; ++i) {
             if (entries[i].topics[0] == messageSentTopic) {
                 cctpMessage = abi.decode(entries[i].data, (bytes));
-                console2.log("legacy CCTP candidate emitter", entries[i].emitter);
-                console2.log("legacy CCTP candidate length", cctpMessage.length);
                 if (cctpMessage.length != LEGACY_CCTP_MESSAGE_SIZE) {
                     continue;
                 }
-                console2.log("legacy CCTP candidate nonce", _legacyCctpMessageNonce(cctpMessage));
-                console2.log("legacy CCTP candidate source domain", _legacyCctpMessageSourceDomain(cctpMessage));
                 if (
                     _legacyCctpMessageNonce(cctpMessage) == expectedNonce
                         && _legacyCctpMessageSourceDomain(cctpMessage) == expectedSourceDomain
@@ -310,10 +298,10 @@ contract CCIPLocalSimulatorFork is Test {
     /// @param entries The recorded logs to scan for the CCTP message
     /// @param messageId The CCIP message ID embedded in the CCTP hook data
     /// @return offchainTokenData The offchainTokenData array
-    function _createOffchainTokenData(Vm.Log[] memory entries, bytes32 messageId)
-        internal
-        returns (bytes[] memory offchainTokenData)
-    {
+    function _createOffchainTokenData(
+        Vm.Log[] memory entries,
+        bytes32 messageId
+    ) internal returns (bytes[] memory offchainTokenData) {
         bytes memory cctpMessage = _getCctpMessage(entries, messageId);
         bytes4 versionTag = _cctpVerifierVersion(cctpMessage);
         bytes memory attestation = _createAttestation(cctpMessage);
@@ -518,14 +506,16 @@ contract CCIPLocalSimulatorFork is Test {
                                 if (offRamps[k - 1].sourceChainSelector == message.sourceChainSelector) {
                                     vm.startPrank(offRamps[k - 1].offRamp);
                                     uint256 numberOfTokens = message.tokenAmounts.length;
-                                    bytes[] memory offchainTokenData =
-                                        _offchainTokenDataPreV1dot6(numberOfTokens, message.sourceTokenData, entries);
+                                    bytes[] memory offchainTokenData = _offchainTokenDataPreV1dot6(
+                                        numberOfTokens, message.sourceTokenData, entries
+                                    );
                                     uint32[] memory tokenGasOverrides = new uint32[](numberOfTokens);
                                     for (uint256 l; l < numberOfTokens; ++l) {
                                         tokenGasOverrides[l] = uint32(message.gasLimit);
                                     }
-                                    try IEVM2EVMOffRampPreV1dot6Fork(offRamps[k - 1].offRamp)
-                                        .executeSingleMessage(message, offchainTokenData, tokenGasOverrides) {
+                                    try IEVM2EVMOffRampPreV1dot6Fork(offRamps[k - 1].offRamp).executeSingleMessage(
+                                        message, offchainTokenData, tokenGasOverrides
+                                    ) {
                                         vm.stopPrank();
                                         s_processedMessages[message.messageId] = true;
                                     } catch (bytes memory err) {
@@ -572,8 +562,7 @@ contract CCIPLocalSimulatorFork is Test {
                                         new Internal.Any2EVMTokenTransfer[](numberOfTokens);
                                     address decodedReceiver = _decodeEvmAddress(message.receiver);
                                     for (uint256 l; l < numberOfTokens; ++l) {
-                                        address decodedDestToken =
-                                            _decodeEvmAddress(message.tokenAmounts[l].destTokenAddress);
+                                        address decodedDestToken = _decodeEvmAddress(message.tokenAmounts[l].destTokenAddress);
                                         tokenAmounts[l] = Internal.Any2EVMTokenTransfer({
                                             sourcePoolAddress: abi.encode(message.tokenAmounts[l].sourcePoolAddress),
                                             destTokenAddress: decodedDestToken,
@@ -594,17 +583,15 @@ contract CCIPLocalSimulatorFork is Test {
                                     for (uint256 l; l < numberOfTokens; ++l) {
                                         sourceTokenData[l] = message.tokenAmounts[l].extraData;
                                     }
-                                    bytes[] memory offchainTokenData = _offchainTokenData(
-                                        numberOfTokens, message.header.messageId, sourceTokenData, entries
-                                    );
+                                    bytes[] memory offchainTokenData =
+                                        _offchainTokenData(numberOfTokens, message.header.messageId, sourceTokenData, entries);
                                     uint32[] memory tokenGasOverrides = new uint32[](numberOfTokens);
                                     for (uint256 l; l < numberOfTokens; ++l) {
                                         tokenGasOverrides[l] = uint32(gasLimit);
                                     }
-                                    try IEVM2EVMOffRampFork(offRamps[k - 1].offRamp)
-                                        .executeSingleMessage(
-                                            any2EVMRampMessage, offchainTokenData, tokenGasOverrides
-                                        ) {
+                                    try IEVM2EVMOffRampFork(offRamps[k - 1].offRamp).executeSingleMessage(
+                                        any2EVMRampMessage, offchainTokenData, tokenGasOverrides
+                                    ) {
                                         vm.stopPrank();
                                     } catch (bytes memory err) {
                                         vm.stopPrank();
